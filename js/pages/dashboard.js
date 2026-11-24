@@ -27,7 +27,7 @@ export async function dashboardPage(container) {
   const steps = [
     { done: counts.areas > 0, text: 'Add your sales areas', href: '#/areas', module: 'areas' },
     { done: counts.products > 0, text: 'Add your products, prices and agent margins', href: '#/products', module: 'products' },
-    { done: counts.suppliers > 0, text: 'Add your suppliers (tea and packaging)', href: '#/suppliers', module: 'suppliers' },
+    { done: counts.suppliers > 0, text: 'Add your suppliers (products and packaging)', href: '#/suppliers', module: 'suppliers' },
     { done: counts.agents > 0, text: 'Add your agents and link their logins', href: '#/agents', module: 'agents' },
     { done: counts.customers > 0, text: 'Add your customers (shops and supermarkets)', href: '#/customers', module: 'customers' },
   ].filter((s) => can(s.module, 'edit') && !isAgent);
