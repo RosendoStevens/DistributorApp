@@ -1,79 +1,107 @@
-// Supabase client, signed-in state and permission checks.
+// Generic list + add/edit/delete page for simple tables.
+import { sb, can } from './db.js';
+import { h, clear, openModal, buildForm, confirmDialog, toast, friendlyError, dataTable } from './ui.js';
 
-const cfg = window.APP_CONFIG || {};
-export const configured = !!cfg.SUPABASE_URL && !cfg.SUPABASE_URL.startsWith('YOUR_') &&
-  !!cfg.SUPABASE_ANON_KEY && !cfg.SUPABASE_ANON_KEY.startsWith('YOUR_');
+const resolve = async (v) => (typeof v === 'function' ? await v() : v);
 
-export const sb = configured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
+export function crudPage(cfg) {
+  return async function render(container) {
+    const canEdit = can(cfg.module, 'edit');
+    const canDel = can(cfg.module, 'full') && !cfg.noDelete;
+    const fieldDefs = await resolve(cfg.fields);
+    const filterDefs = (await resolve(cfg.filters)) || [];
 
-export const MODULES = [
-  { key: 'users', label: 'Staff and roles' },
-  { key: 'agents', label: 'Agents' },
-  { key: 'areas', label: 'Areas' },
-  { key: 'customers', label: 'Customers' },
-  { key: 'products', label: 'Products and prices' },
-  { key: 'costs', label: 'Cost prices' },
-  { key: 'margins', label: 'Agent margins' },
-  { key: 'overrides', label: 'Head of sales override' },
-  { key: 'suppliers', label: 'Suppliers' },
-  { key: 'settings', label: 'Settings' },
-  { key: 'audit', label: 'Audit log' },
-];
+    const search = h('input', { class: 'search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
+    const filterEls = filterDefs.map((f) => {
+      const s = h('select', { 'aria-label': f.label }, h('option', { value: '' }, 'All ' + f.label.toLowerCase()),
+        f.options.map((o) => h('option', { value: o.value }, o.label)));
+      s.addEventListener('change', draw);
+      return { def: f, el: s };
+    });
+    const listBox = h('div', { class: 'card' });
+    let rows = [];
 
-export const ROLES = [
-  { key: 'admin', label: 'Admin / Owner' },
-  { key: 'head_of_sales', label: 'Head of Sales' },
-  { key: 'accounts', label: 'Accounts' },
-  { key: 'store_keeper', label: 'Store keeper' },
-  { key: 'delivery', label: 'Delivery staff' },
-  { key: 'agent', label: 'Agent' },
-];
-export const roleLabel = (k) => (ROLES.find((r) => r.key === k) || { label: k }).label;
+    async function load() {
+      let q = sb.from(cfg.table).select(cfg.select || '*');
+      if (cfg.order) q = q.order(cfg.order);
+      const { data, error } = await q;
+      if (error) { toast(friendlyError(error), 'bad'); return; }
+      rows = data || [];
+      draw();
+    }
 
-export const state = { user: null, profile: null, perms: {}, settings: {}, myAgentId: null };
+    function draw() {
+      const term = search.value.trim().toLowerCase();
+      let list = rows.filter((r) => filterEls.every((f) => !f.el.value || String(r[f.def.key]) === f.el.value));
+      if (term) list = list.filter((r) => (cfg.searchText ? cfg.searchText(r) : JSON.stringify(r)).toLowerCase().includes(term));
+      clear(listBox).append(dataTable(cfg.columns, list, openEdit));
+    }
+    search.addEventListener('input', draw);
 
-const rank = (l) => ({ none: 0, view: 1, edit: 2, full: 3 }[l] ?? 0);
+    async function openEdit(row) {
+      const isNew = !row;
+      if (isNew && !canEdit) return;
+      const extra = row && cfg.loadExtra ? await cfg.loadExtra(row) : {};
+      const values = { ...(isNew ? (cfg.defaults ? cfg.defaults() : {}) : row), ...extra };
+      const defs = fieldDefs.map((f) => ({
+        ...f,
+        hidden: typeof f.hidden === 'function' ? f.hidden() : f.hidden,
+        readonly: !canEdit || f.readonly || (f.readonlyOnEdit && !isNew),
+      }));
+      const form = buildForm(defs, values);
+      const errBox = h('div', { class: 'error-box hidden' });
+      const body = h('div', {}, errBox, form.el);
+      const showErr = (m) => { errBox.textContent = m; errBox.classList.remove('hidden'); };
 
-export function can(module, level = 'view') {
-  if (!state.profile || !state.profile.active) return false;
-  if (state.profile.role === 'admin') return true;
-  return rank(state.perms[module]) >= rank(level);
+      const actions = [];
+      if (!isNew && canDel) {
+        actions.push({
+          label: 'Delete', kind: 'danger', left: true,
+          onClick: async (close) => {
+            if (!(await confirmDialog(`Delete this ${cfg.itemName || 'record'}? This cannot be undone.`))) return;
+            const { error } = await sb.from(cfg.table).delete().eq('id', row.id);
+            if (error) { showErr(friendlyError(error)); return; }
+            toast('Deleted'); close(); load();
+          },
+        });
+      }
+      actions.push({ label: canEdit ? 'Cancel' : 'Close', onClick: (close) => close() });
+      if (canEdit) {
+        actions.push({
+          label: 'Save', kind: 'primary',
+          onClick: async (close) => {
+            errBox.classList.add('hidden');
+            const problem = form.validate();
+            if (problem) return showErr(problem);
+            const all = form.values();
+            const payload = {}; const virt = {};
+            for (const f of defs) {
+              if (!(f.key in all)) continue;
+              if (f.virtual) { virt[f.key] = all[f.key]; continue; }
+              if (!isNew && f.readonlyOnEdit) continue;
+              payload[f.key] = all[f.key];
+            }
+            try {
+              if (cfg.beforeSave) await cfg.beforeSave(payload, isNew, virt, row);
+              if (isNew) for (const k of Object.keys(payload)) if (payload[k] == null) delete payload[k];
+              const q = isNew ? sb.from(cfg.table).insert(payload) : sb.from(cfg.table).update(payload).eq('id', row.id);
+              const { data, error } = await q.select().single();
+              if (error) throw error;
+              if (cfg.afterSave) await cfg.afterSave(data, virt, isNew);
+              toast('Saved'); close(); load();
+            } catch (e) { showErr(friendlyError(e)); }
+          },
+        });
+      }
+      openModal({ title: (isNew ? 'Add ' : canEdit ? 'Edit ' : 'View ') + (cfg.itemName || cfg.title.toLowerCase()), body, actions });
+    }
+
+    clear(container).append(
+      h('div', { class: 'page-head' },
+        h('div', {}, h('h1', {}, cfg.title), cfg.subtitle ? h('div', { class: 'muted small' }, cfg.subtitle) : null),
+        h('div', { class: 'toolbar' }, search, filterEls.map((f) => f.el),
+          canEdit ? h('button', { class: 'btn primary', onclick: () => openEdit(null) }, '+ Add') : null)),
+      listBox);
+    await load();
+  };
 }
-
-export async function loadAccount() {
-  const { data: { session } } = await sb.auth.getSession();
-  state.user = session ? session.user : null;
-  state.profile = null; state.perms = {}; state.myAgentId = null;
-  if (!state.user) return;
-  const { data: profile } = await sb.from('profiles').select('*').eq('id', state.user.id).maybeSingle();
-  state.profile = profile;
-  if (!profile || !profile.active) return;
-  const { data: perms } = await sb.from('role_permissions').select('module, level').eq('role', profile.role);
-  state.perms = Object.fromEntries((perms || []).map((p) => [p.module, p.level]));
-  if (profile.role === 'agent') {
-    const { data: ag } = await sb.from('agents').select('id').eq('profile_id', profile.id).maybeSingle();
-    state.myAgentId = ag ? ag.id : null;
-  }
-  await loadSettings();
-}
-
-export async function loadSettings() {
-  const { data } = await sb.from('settings').select('key, value');
-  state.settings = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
-}
-
-export const setting = (key, fallback = {}) => state.settings[key] || fallback;
-
-// Options helper for select fields
-export async function optionsFrom(table, labelKey = 'name', { filter, order } = {}) {
-  let q = sb.from(table).select('*').order(order || labelKey);
-  if (filter) q = filter(q);
-  const { data } = await q;
-  return (data || []).map((r) => ({ value: r.id, label: r[labelKey] }));
-}
-
-// A separate client that never stores a session. Used by the Admin to create
-// staff logins without being signed out.
-export const tempClient = () => window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'tmp-signup-client' },
-});
