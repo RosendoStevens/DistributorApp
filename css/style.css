@@ -60,6 +60,7 @@ a { color: var(--accent); }
 .nav a:hover { background: var(--surface-2); }
 .nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav .ico { width: 20px; text-align: center; }
+.nav-group { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 14px 12px 4px; }
 .side-foot { padding: 12px 16px; border-top: 1px solid var(--border); font-size: .85rem; }
 .main { margin-left: 248px; flex: 1; min-width: 0; }
 .topbar {
