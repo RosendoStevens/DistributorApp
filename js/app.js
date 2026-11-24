@@ -2,7 +2,9 @@
 import { sb, configured, state, can, loadAccount, setting, roleLabel } from './db.js';
 import { h, clear, toast, friendlyError, buildForm } from './ui.js';
 import { dashboardPage } from './pages/dashboard.js';
-import { customersPage, agentsPage, areasPage, suppliersPage } from './pages/simple.js';
+import { customersPage, agentsPage, areasPage, suppliersPage, materialsPage, locationsPage } from './pages/simple.js';
+import { stockPage } from './pages/stock.js';
+import { purchasingPage } from './pages/purchasing.js';
 import { productsPage } from './pages/products.js';
 import { staffPage } from './pages/staff.js';
 import { settingsPage } from './pages/settings.js';
@@ -13,11 +15,18 @@ const app = document.getElementById('app');
 
 const ROUTES = [
   { path: 'dashboard', label: 'Home', icon: '🏠', render: dashboardPage },
+  { group: 'Sales' },
   { path: 'customers', label: 'Customers', icon: '🏪', module: 'customers', render: customersPage },
   { path: 'agents', label: 'Agents', icon: '🧑‍💼', module: 'agents', render: agentsPage },
   { path: 'areas', label: 'Areas', icon: '📍', module: 'areas', render: areasPage },
   { path: 'products', label: 'Products and prices', icon: '🍃', module: 'products', render: productsPage },
+  { group: 'Stock and buying' },
+  { path: 'stock', label: 'Stock', icon: '📦', module: 'stock', render: stockPage },
+  { path: 'purchasing', label: 'Purchasing', icon: '🛒', module: 'purchasing', render: purchasingPage },
   { path: 'suppliers', label: 'Suppliers', icon: '🚚', module: 'suppliers', render: suppliersPage },
+  { path: 'materials', label: 'Materials', icon: '🌿', module: 'stock', render: materialsPage },
+  { path: 'locations', label: 'Warehouses', icon: '🏭', module: 'stock', render: locationsPage },
+  { group: 'Admin' },
   { path: 'staff', label: 'Staff and roles', icon: '👥', module: 'users', render: staffPage },
   { path: 'settings', label: 'Settings', icon: '⚙️', module: 'settings', render: settingsPage },
   { path: 'audit', label: 'Audit log', icon: '🧾', module: 'audit', render: auditPage },
@@ -100,8 +109,15 @@ let contentEl = null;
 
 function renderShell() {
   const company = setting('company', {});
-  const nav = h('nav', { class: 'nav' }, ROUTES.filter((r) => !r.module || can(r.module, 'view')).map((r) =>
-    h('a', { href: '#/' + r.path, 'data-path': r.path, onclick: closeMenu }, h('span', { class: 'ico' }, r.icon), r.label)));
+  const navItems = [];
+  let pendingGroup = null;
+  for (const r of ROUTES) {
+    if (r.group) { pendingGroup = r.group; continue; }
+    if (r.module && !can(r.module, 'view')) continue;
+    if (pendingGroup) { navItems.push(h('div', { class: 'nav-group' }, pendingGroup)); pendingGroup = null; }
+    navItems.push(h('a', { href: '#/' + r.path, 'data-path': r.path, onclick: closeMenu }, h('span', { class: 'ico' }, r.icon), r.label));
+  }
+  const nav = h('nav', { class: 'nav' }, navItems);
   const side = h('aside', { class: 'sidebar', id: 'sidebar' },
     h('div', { class: 'brand' }, h('div', { class: 'name' }, company.name || 'Distribution Manager'), h('div', { class: 'sub' }, 'Distribution Manager')),
     nav,
@@ -123,7 +139,7 @@ function closeMenu() { const s = document.getElementById('sidebar'); if (s) { s.
 async function route() {
   if (!contentEl || !state.profile || !state.profile.active) return;
   const path = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?')[0];
-  const r = ROUTES.find((x) => x.path === path) || ROUTES[0];
+  const r = ROUTES.find((x) => x.path === path) || ROUTES.find((x) => x.path === 'dashboard');
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.path === r.path));
   window.scrollTo(0, 0);
   if (r.module && !can(r.module, 'view')) {
